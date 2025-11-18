@@ -26,12 +26,14 @@ const navItems = document.querySelectorAll('.nav-item');
 
 // === Универсальная функция для API запросов ===
 async function apiCall(url, options = {}) {
-  const initData = tg.initData || '';
+  // Правильное получение initData
+  const initData = window.Telegram.WebApp.initData;
+  console.log('Sending initData length:', initData ? initData.length : 0);
   
   const defaultOptions = {
     headers: {
       'Content-Type': 'application/json',
-      'x-telegram-initdata': initData,
+      'x-telegram-initdata': initData || '',
       ...options.headers
     }
   };
@@ -42,11 +44,15 @@ async function apiCall(url, options = {}) {
   }
 
   try {
+    console.log('Making API call to:', url);
     const response = await fetch(url, { ...defaultOptions, ...options });
+    
     if (!response.ok) {
       const errorText = await response.text();
+      console.error('API error response:', errorText);
       throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
     }
+
     return await response.json();
   } catch (error) {
     console.error('API call failed:', error);
@@ -61,7 +67,31 @@ async function loadBookings() {
     console.log('Брони загружены:', bookings.length);
   } catch (err) {
     console.error('Ошибка загрузки броней:', err);
-    tg.showAlert('Не удалось загрузить брони. Проверьте интернет.');
+    showAlert('Не удалось загрузить брони. Проверьте интернет.');
+  }
+}
+
+// === Универсальные функции показа уведомлений ===
+function showAlert(message) {
+  if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.showAlert) {
+    window.Telegram.WebApp.showAlert(message);
+  } else {
+    alert(message);
+  }
+}
+
+function showPopup(options, callback) {
+  if (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.showPopup) {
+    try {
+      window.Telegram.WebApp.showPopup(options, callback);
+    } catch (error) {
+      console.warn('showPopup not supported, using alert');
+      alert(options.message || options.title);
+      if (callback) callback('ok');
+    }
+  } else {
+    alert(options.message || options.title);
+    if (callback) callback('ok');
   }
 }
 
@@ -119,10 +149,10 @@ document.getElementById('confirm-booking').onclick = async () => {
   const surname = document.getElementById('manager-surname').value.trim();
 
   if (!date || !start || !end || !surname) {
-    return tg.showAlert("Заполните все поля");
+    return showAlert("Заполните все поля");
   }
   if (start >= end) {
-    return tg.showAlert("Время окончания должно быть позже начала");
+    return showAlert("Время окончания должно быть позже начала");
   }
 
   const body = {
@@ -145,7 +175,7 @@ document.getElementById('confirm-booking').onclick = async () => {
       body: body
     });
 
-    tg.showPopup({
+    showPopup({
       title: "Готово!",
       message: editingBookingId ? "Бронь обновлена" : `Забронировано на ${surname.toUpperCase()}`
     }, async () => {
@@ -160,7 +190,7 @@ document.getElementById('confirm-booking').onclick = async () => {
 
   } catch (err) {
     console.error('Ошибка бронирования:', err);
-    tg.showAlert('Ошибка при бронировании: ' + (err.message || 'Нет связи с сервером'));
+    showAlert('Ошибка при бронировании: ' + (err.message || 'Нет связи с сервером'));
   }
 };
 
@@ -297,7 +327,7 @@ async function loadMyBookings() {
     };
 
     window.deleteBooking = async (id) => {
-      tg.showPopup({
+      showPopup({
         title: "Удалить бронь?",
         message: "Это действие нельзя отменить",
         buttons: [{ type: 'destructive', text: 'Удалить' }, { type: 'cancel' }]
@@ -306,12 +336,12 @@ async function loadMyBookings() {
 
         try {
           await apiCall(`${API_URL}/bookings/${id}`, { method: 'DELETE' });
-          tg.showAlert("Бронь удалена");
+          showAlert("Бронь удалена");
           await loadBookings();
           renderCalendar();
           loadMyBookings();
         } catch {
-          tg.showAlert("Ошибка при удалении");
+          showAlert("Ошибка при удалении");
         }
       });
     };
@@ -325,6 +355,8 @@ async function loadMyBookings() {
 // === Инициализация ===
 document.addEventListener('DOMContentLoaded', async () => {
   console.log('Mini App initialized for user:', currentUser.name);
+  console.log('initData available:', !!window.Telegram.WebApp.initData);
+  console.log('initData length:', window.Telegram.WebApp.initData ? window.Telegram.WebApp.initData.length : 0);
   
   // Загружаем брони при старте
   await loadBookings();
