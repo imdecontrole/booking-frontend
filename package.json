@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "scripts": {
     "start": "npx serve -s . -l 3000",
-    "build": "echo 'Static site - no build needed' && cp -r . /app/build"
+    "build": "echo 'Static site - no build needed' && mkdir -p build && cp -r index.html script.js style.css images/ build/"
   },
   "dependencies": {
     "serve": "^14.0.0"
