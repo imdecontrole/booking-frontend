@@ -2,19 +2,14 @@ const tg = window.Telegram.WebApp;
 tg.ready();
 tg.expand();
 
-// === URL API через туннель ===
+// === URL API ===
 const API_URL = 'https://imdecontrole-booking-backend-98a1.twc1.net/api';
 
-const currentUser = {
-  id: tg.initDataUnsafe?.user?.id || 999,
-  name: tg.initDataUnsafe?.user 
-    ? `${tg.initDataUnsafe.user.first_name || ''} ${tg.initDataUnsafe.user.last_name || ''}`.trim() || 'Пользователь'
-    : 'Пользователь'
-};
-
+// Обновленные комнаты с добавлением МСК
 const rooms = [
   { id: 1, name: "Производство ПСК" },
-  { id: 2, name: "Офис СПБ" }
+  { id: 2, name: "Офис СПБ" },
+  { id: 3, name: "Офис МСК" }
 ];
 
 let bookings = [];
@@ -26,9 +21,8 @@ const navItems = document.querySelectorAll('.nav-item');
 
 // === Универсальная функция для API запросов ===
 async function apiCall(url, options = {}) {
-  // Правильное получение initData
   const initData = window.Telegram.WebApp.initData;
-  console.log('Sending initData length:', initData ? initData.length : 0);
+  console.log('Making API call to:', url);
   
   const defaultOptions = {
     headers: {
@@ -38,19 +32,16 @@ async function apiCall(url, options = {}) {
     }
   };
 
-  // Преобразуем body в JSON если это объект
   if (options.body && typeof options.body === 'object') {
     options.body = JSON.stringify(options.body);
   }
 
   try {
-    console.log('Making API call to:', url);
     const response = await fetch(url, { ...defaultOptions, ...options });
     
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error('API error response:', errorText);
-      throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
+      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+      throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
     }
 
     return await response.json();
@@ -118,7 +109,13 @@ navItems.forEach(item => {
 document.querySelectorAll('.btn-book').forEach(btn => {
   btn.addEventListener('click', e => {
     const card = e.target.closest('.room-card');
-    const roomId = card.dataset.room === 'psk' ? 1 : 2;
+    const roomType = card.dataset.room;
+    let roomId;
+    
+    if (roomType === 'psk') roomId = 1;
+    else if (roomType === 'spb') roomId = 2;
+    else if (roomType === 'msk') roomId = 3;
+    
     selectedRoom = rooms.find(r => r.id === roomId);
     editingBookingId = null;
 
@@ -190,7 +187,14 @@ document.getElementById('confirm-booking').onclick = async () => {
 
   } catch (err) {
     console.error('Ошибка бронирования:', err);
-    showAlert('Ошибка при бронировании: ' + (err.message || 'Нет связи с сервером'));
+    // Улучшенные сообщения об ошибках
+    if (err.message.includes('уже занята')) {
+      showAlert('На это время переговорка уже занята. Выберите другое время.');
+    } else if (err.message.includes('прошлом')) {
+      showAlert('Нельзя забронировать переговорку в прошлом. Выберите другую дату.');
+    } else {
+      showAlert('Ошибка при бронировании: ' + (err.message || 'Нет связи с сервером'));
+    }
   }
 };
 
@@ -283,7 +287,7 @@ document.getElementById('close-day-modal').onclick = () => {
   document.getElementById('day-modal').classList.remove('active');
 };
 
-// === Мои брони с редактированием и удалением ===
+// === Мои брони с улучшенным редактированием и удалением ===
 async function loadMyBookings() {
   try {
     const my = await apiCall(`${API_URL}/my-bookings`);
@@ -302,49 +306,25 @@ async function loadMyBookings() {
           <div>${b.date.replace(/-/g, '.')} • ${b.timeStart}–${b.timeEnd}</div>
           <div class="user"><strong>${b.managerSurname}</strong></div>
           <div style="margin-top:14px; display:flex; gap:10px;">
-            <button class="btn-secondary" onclick="editBooking(${b.id})" style="flex:1; padding:11px; font-size:14px;">Изменить</button>
-            <button class="btn-secondary" onclick="deleteBooking(${b.id})" style="flex:1; padding:11px; font-size:14px; background:#ffe5e5; color:#c00;">Удалить</button>
+            <button class="btn-secondary edit-btn" data-id="${b.id}" style="flex:1; padding:11px; font-size:14px;">Изменить</button>
+            <button class="btn-secondary delete-btn" data-id="${b.id}" style="flex:1; padding:11px; font-size:14px; background:#ffe5e5; color:#c00;">Удалить</button>
           </div>
         </div>
       `;
     }).join('');
 
-    // Глобальные функции для кнопок
-    window.editBooking = async (id) => {
-      const booking = my.find(b => b.id === id);
-      if (!booking) return;
-
-      selectedRoom = rooms.find(r => r.id === booking.roomId);
-      editingBookingId = id;
-
-      document.getElementById('modal-title').textContent = selectedRoom.name + " (редактирование)";
-      document.getElementById('book-date').value = booking.date;
-      document.getElementById('book-start').value = booking.timeStart;
-      document.getElementById('book-end').value = booking.timeEnd;
-      document.getElementById('manager-surname').value = booking.managerSurname;
-
-      document.getElementById('booking-modal').classList.add('active');
-    };
-
-    window.deleteBooking = async (id) => {
-      showPopup({
-        title: "Удалить бронь?",
-        message: "Это действие нельзя отменить",
-        buttons: [{ type: 'destructive', text: 'Удалить' }, { type: 'cancel' }]
-      }, async (btn) => {
-        if (btn !== 'destructive') return;
-
-        try {
-          await apiCall(`${API_URL}/bookings/${id}`, { method: 'DELETE' });
-          showAlert("Бронь удалена");
-          await loadBookings();
-          renderCalendar();
-          loadMyBookings();
-        } catch {
-          showAlert("Ошибка при удалении");
-        }
-      });
-    };
+    // Добавляем обработчики через делегирование событий
+    container.addEventListener('click', async (e) => {
+      if (e.target.classList.contains('edit-btn')) {
+        const id = parseInt(e.target.dataset.id);
+        await editBooking(id, my);
+      }
+      
+      if (e.target.classList.contains('delete-btn')) {
+        const id = parseInt(e.target.dataset.id);
+        await deleteBooking(id);
+      }
+    });
 
   } catch (err) {
     console.error('Ошибка загрузки моих броней:', err);
@@ -352,9 +332,49 @@ async function loadMyBookings() {
   }
 }
 
+// Функция редактирования брони
+async function editBooking(id, myBookings) {
+  const booking = myBookings.find(b => b.id === id);
+  if (!booking) return;
+
+  selectedRoom = rooms.find(r => r.id === booking.roomId);
+  editingBookingId = id;
+
+  document.getElementById('modal-title').textContent = selectedRoom.name + " (редактирование)";
+  document.getElementById('book-date').value = booking.date;
+  document.getElementById('book-start').value = booking.timeStart;
+  document.getElementById('book-end').value = booking.timeEnd;
+  document.getElementById('manager-surname').value = booking.managerSurname;
+
+  document.getElementById('booking-modal').classList.add('active');
+}
+
+// Функция удаления брони
+async function deleteBooking(id) {
+  showPopup({
+    title: "Удалить бронь?",
+    message: "Это действие нельзя отменить",
+    buttons: [{ type: 'destructive', text: 'Удалить' }, { type: 'cancel', text: 'Отмена' }]
+  }, async (btn) => {
+    if (btn !== 'destructive') return;
+
+    try {
+      await apiCall(`${API_URL}/bookings/${id}`, { method: 'DELETE' });
+      showAlert("Бронь успешно удалена");
+      // Мгновенное обновление интерфейса
+      await loadBookings();
+      renderCalendar();
+      await loadMyBookings();
+    } catch (err) {
+      console.error('Ошибка удаления:', err);
+      showAlert("Ошибка при удалении: " + (err.message || 'Неизвестная ошибка'));
+    }
+  });
+}
+
 // === Инициализация ===
 document.addEventListener('DOMContentLoaded', async () => {
-  console.log('Mini App initialized for user:', currentUser.name);
+  console.log('Mini App initialized');
   console.log('initData available:', !!window.Telegram.WebApp.initData);
   console.log('initData length:', window.Telegram.WebApp.initData ? window.Telegram.WebApp.initData.length : 0);
   
