@@ -40,25 +40,36 @@ async function apiCall(url, options = {}) {
     const response = await fetch(url, { ...defaultOptions, ...options });
     
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-      throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+      const errorText = await response.text();
+      console.error('API error response:', errorText);
+      throw new Error(`HTTP error! status: ${response.status}`);
     }
 
     return await response.json();
   } catch (error) {
     console.error('API call failed:', error);
+    // Более конкретное сообщение об ошибке
+    if (error.message.includes('Failed to fetch')) {
+      throw new Error('Нет соединения с сервером. Проверьте интернет.');
+    }
     throw error;
   }
 }
 
-// === Загрузка всех броней с сервера ===
+// === Загрузка всех броней с сервером ===
 async function loadBookings() {
   try {
+    console.log('Loading bookings from server...');
     bookings = await apiCall(`${API_URL}/bookings`);
     console.log('Брони загружены:', bookings.length);
+    return true;
   } catch (err) {
     console.error('Ошибка загрузки броней:', err);
-    showAlert('Не удалось загрузить брони. Проверьте интернет.');
+    // Показываем ошибку только если это не первая загрузка
+    if (bookings.length === 0) {
+      showAlert('Не удалось загрузить брони. Проверьте интернет.');
+    }
+    return false;
   }
 }
 
@@ -90,16 +101,22 @@ function showPopup(options, callback) {
 navItems.forEach(item => {
   item.addEventListener('click', async () => {
     const screenId = item.dataset.screen;
+    
+    // Скрываем все экраны
     screens.forEach(s => s.classList.remove('active'));
+    
+    // Показываем выбранный экран
     document.getElementById(screenId).classList.add('active');
+    
+    // Обновляем навигацию
     navItems.forEach(n => n.classList.remove('active'));
     item.classList.add('active');
 
+    // Загружаем данные для экрана
     if (screenId === 'calendar') {
       await loadBookings();
       renderCalendar();
-    }
-    if (screenId === 'mybookings') {
+    } else if (screenId === 'mybookings') {
       await loadMyBookings();
     }
   });
@@ -121,10 +138,11 @@ document.querySelectorAll('.btn-book').forEach(btn => {
 
     document.getElementById('modal-title').textContent = selectedRoom.name;
     
-    // Устанавливаем текущую дату
+    // Устанавливаем текущую дату (минимум сегодня)
     const today = new Date();
     const formattedDate = today.toISOString().split('T')[0];
     document.getElementById('book-date').value = formattedDate;
+    document.getElementById('book-date').min = formattedDate; // Запрещаем прошлые даты
     
     document.getElementById('book-start').value = '10:00';
     document.getElementById('book-end').value = '11:00';
@@ -145,11 +163,15 @@ document.getElementById('confirm-booking').onclick = async () => {
   const end = document.getElementById('book-end').value;
   const surname = document.getElementById('manager-surname').value.trim();
 
+  // Валидация
   if (!date || !start || !end || !surname) {
     return showAlert("Заполните все поля");
   }
   if (start >= end) {
     return showAlert("Время окончания должно быть позже начала");
+  }
+  if (surname.length < 2) {
+    return showAlert("Фамилия должна содержать хотя бы 2 символа");
   }
 
   const body = {
@@ -167,10 +189,20 @@ document.getElementById('confirm-booking').onclick = async () => {
   const method = editingBookingId ? 'PUT' : 'POST';
 
   try {
+    // Показываем индикатор загрузки
+    const confirmBtn = document.getElementById('confirm-booking');
+    const originalText = confirmBtn.textContent;
+    confirmBtn.textContent = 'Бронируем...';
+    confirmBtn.disabled = true;
+
     const data = await apiCall(url, {
       method,
       body: body
     });
+
+    // Восстанавливаем кнопку
+    confirmBtn.textContent = originalText;
+    confirmBtn.disabled = false;
 
     showPopup({
       title: "Готово!",
@@ -181,19 +213,26 @@ document.getElementById('confirm-booking').onclick = async () => {
       await loadBookings();
       renderCalendar();
       if (document.getElementById('mybookings').classList.contains('active')) {
-        loadMyBookings();
+        await loadMyBookings();
       }
     });
 
   } catch (err) {
+    // Восстанавливаем кнопку при ошибке
+    const confirmBtn = document.getElementById('confirm-booking');
+    confirmBtn.textContent = 'Забронировать';
+    confirmBtn.disabled = false;
+
     console.error('Ошибка бронирования:', err);
     // Улучшенные сообщения об ошибках
     if (err.message.includes('уже занята')) {
       showAlert('На это время переговорка уже занята. Выберите другое время.');
     } else if (err.message.includes('прошлом')) {
       showAlert('Нельзя забронировать переговорку в прошлом. Выберите другую дату.');
+    } else if (err.message.includes('Нет соединения')) {
+      showAlert('Нет соединения с сервером. Проверьте интернет и попробуйте снова.');
     } else {
-      showAlert('Ошибка при бронировании: ' + (err.message || 'Нет связи с сервером'));
+      showAlert('Ошибка при бронировании: ' + (err.message || 'Попробуйте еще раз'));
     }
   }
 };
@@ -208,12 +247,18 @@ const monthNames = ["Январь", "Февраль", "Март", "Апрель"
 function renderCalendar() {
   const daysContainer = document.getElementById('calendar-days');
   const monthYearEl = document.getElementById('month-year');
+  
+  if (!daysContainer || !monthYearEl) {
+    console.error('Calendar elements not found');
+    return;
+  }
+  
   monthYearEl.textContent = `${monthNames[currentMonth]} ${currentYear}`;
   daysContainer.innerHTML = '';
 
   const firstDay = new Date(currentYear, currentMonth, 1).getDay();
   const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
-  const startDay = firstDay === 0 ? 6 : firstDay - 1;
+  const startDay = firstDay === 0 ? 6 : firstDay - 1; // Понедельник = 0
 
   // Пустые ячейки для начала месяца
   for (let i = 0; i < startDay; i++) {
@@ -223,13 +268,14 @@ function renderCalendar() {
   }
 
   // Дни месяца
+  const today = new Date();
   for (let day = 1; day <= daysInMonth; day++) {
     const dateStr = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     const dayEl = document.createElement('div');
     dayEl.className = 'calendar-day';
     dayEl.textContent = day;
 
-    const today = new Date();
+    // Проверяем сегодняшний день
     if (day === today.getDate() && currentMonth === today.getMonth() && currentYear === today.getFullYear()) {
       dayEl.classList.add('today');
     }
@@ -246,15 +292,22 @@ function renderCalendar() {
   }
 }
 
+// Обработчики для календаря
 document.getElementById('prev-month').addEventListener('click', () => {
   currentMonth--;
-  if (currentMonth < 0) { currentMonth = 11; currentYear--; }
+  if (currentMonth < 0) { 
+    currentMonth = 11; 
+    currentYear--; 
+  }
   renderCalendar();
 });
 
 document.getElementById('next-month').addEventListener('click', () => {
   currentMonth++;
-  if (currentMonth > 11) { currentMonth = 0; currentYear++; }
+  if (currentMonth > 11) { 
+    currentMonth = 0; 
+    currentYear++; 
+  }
   renderCalendar();
 });
 
@@ -293,6 +346,11 @@ async function loadMyBookings() {
     const my = await apiCall(`${API_URL}/my-bookings`);
     
     const container = document.getElementById('my-bookings-list');
+    if (!container) {
+      console.error('My bookings container not found');
+      return;
+    }
+    
     if (my.length === 0) {
       container.innerHTML = '<div class="empty">У вас пока нет бронирований</div>';
       return;
@@ -328,7 +386,10 @@ async function loadMyBookings() {
 
   } catch (err) {
     console.error('Ошибка загрузки моих броней:', err);
-    document.getElementById('my-bookings-list').innerHTML = '<div class="empty">Ошибка загрузки</div>';
+    const container = document.getElementById('my-bookings-list');
+    if (container) {
+      container.innerHTML = '<div class="empty">Ошибка загрузки</div>';
+    }
   }
 }
 
@@ -342,6 +403,7 @@ async function editBooking(id, myBookings) {
 
   document.getElementById('modal-title').textContent = selectedRoom.name + " (редактирование)";
   document.getElementById('book-date').value = booking.date;
+  document.getElementById('book-date').min = new Date().toISOString().split('T')[0]; // Запрещаем прошлые даты
   document.getElementById('book-start').value = booking.timeStart;
   document.getElementById('book-end').value = booking.timeEnd;
   document.getElementById('manager-surname').value = booking.managerSurname;
@@ -381,13 +443,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Загружаем брони при старте
   await loadBookings();
   
-  // Если активен календарь - рендерим его
+  // Автоматически рендерим календарь если он активен
   if (document.getElementById('calendar').classList.contains('active')) {
     renderCalendar();
   }
   
-  // Если активны "Мои брони" - загружаем их
+  // Автоматически загружаем "Мои брони" если экран активен
   if (document.getElementById('mybookings').classList.contains('active')) {
     await loadMyBookings();
   }
 });
+
+// Делаем функции глобальными для обработчиков
+window.editBooking = editBooking;
+window.deleteBooking = deleteBooking;
